@@ -1,0 +1,13 @@
+.venv
+__pycache__
+**/__pycache__
+.DS_Store
+.coverage
+.pytest_cache
+.mypy_cache
+.ruff_cache
+htmlcov
+poetry.lock
+pytest-coverage.txt
+pytest.xml
+lab.ipynb
