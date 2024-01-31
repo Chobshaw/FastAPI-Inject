@@ -7,21 +7,21 @@ logger = logging.getLogger(__name__)
 MESSAGE = "Hello World!"
 
 
-def func() -> str:
+def sync_function() -> str:
     return MESSAGE
 
 
-def generator() -> Iterator[str]:
+def sync_generator() -> Iterator[str]:
     yield MESSAGE
     logger.info("Generator finished")
 
 
-async def slow_func() -> str:
-    await asyncio.sleep(1)
+async def async_function() -> str:
+    await asyncio.sleep(0.1)
     return MESSAGE
 
 
-async def slow_generator() -> AsyncIterator[str]:
-    await asyncio.sleep(1)
+async def async_generator() -> AsyncIterator[str]:
+    await asyncio.sleep(0.1)
     yield MESSAGE
     logger.info("Generator finished")

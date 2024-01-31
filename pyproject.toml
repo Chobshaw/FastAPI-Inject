@@ -20,3 +20,40 @@ mypy = "^1.8.0"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    # Docstrings
+    "D",
+    # Missing type annotation for 'self'
+    "ANN101",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = [
+    # Assert used
+    "S101",
+    # Missing return type
+    "ANN201",
+    # Unused function argument
+    "ARG001",
+    # Magic value used in comparison
+    "PLR2004",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+exclude_also = [
+    "if __name__ == .__main__.:",
+    "def __repr__",
+    '@(abc\.)?abstractmethod',
+    "raise NotImplementedError",
+    "pass",
+    '\.\.\.',
+]
