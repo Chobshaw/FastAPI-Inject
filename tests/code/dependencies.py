@@ -1,6 +1,7 @@
-import asyncio
 import logging
 from collections.abc import AsyncIterator, Iterator
+
+import anyio
 
 logger = logging.getLogger(__name__)
 
@@ -13,15 +14,13 @@ def sync_function() -> str:
 
 def sync_generator() -> Iterator[str]:
     yield MESSAGE
-    logger.info("Generator finished")
 
 
 async def async_function() -> str:
-    await asyncio.sleep(0.1)
+    await anyio.sleep(0.1)
     return MESSAGE
 
 
 async def async_generator() -> AsyncIterator[str]:
-    await asyncio.sleep(0.1)
+    await anyio.sleep(0.1)
     yield MESSAGE
-    logger.info("Generator finished")

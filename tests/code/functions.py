@@ -16,6 +16,10 @@ def get_message(message: str = Depends(sync_function)) -> str:
     return message
 
 
+async def get_message_async(message: str = Depends(async_function)) -> str:
+    return message
+
+
 def get_messages_sync(
     message_1: str = Depends(sync_function),
     message_2: str = Depends(sync_generator),

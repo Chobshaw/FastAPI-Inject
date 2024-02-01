@@ -1,5 +1,6 @@
 import pytest
 from fastapi import Depends, FastAPI
+from httpx import AsyncClient
 
 from fastapi_inject.injection import (
     DependencyInfo,
@@ -23,6 +24,7 @@ from tests.code.functions import (
     get_messages_mixed_deps,
     get_messages_sync,
 )
+from tests.conftest import OVERRIDE_MESSAGE
 
 
 def test_is_provided():
@@ -79,10 +81,11 @@ def test_get_dependencies():
 
 def test_dependencies_generator(
     enabled_app: FastAPI,
-    dependencies_info: list[DependencyInfo],
 ):
-    # Test generator
     dependencies = [sync_function, async_function, sync_generator, async_generator]
+    dependencies_info = _get_dependencies(get_messages_async)
+
+    # Test generator
     i = 0
     for name, dependency in _dependencies(
         dependencies=dependencies_info,
@@ -136,3 +139,21 @@ async def test_inject_async(enabled_app: FastAPI):
         MESSAGE,
         MESSAGE,
     ]
+
+
+@pytest.mark.anyio()
+async def test_inject_in_app(client: AsyncClient):
+    response = await client.get("/sync")
+    assert response.json().get("message") == MESSAGE
+
+    response = await client.get("/async")
+    assert response.json().get("message") == MESSAGE
+
+
+@pytest.mark.anyio()
+async def test_inject_in_app_with_overrides(overrides_client: AsyncClient):
+    response = await overrides_client.get("/sync")
+    assert response.json().get("message") == OVERRIDE_MESSAGE
+
+    response = await overrides_client.get("/async")
+    assert response.json().get("message") == OVERRIDE_MESSAGE
