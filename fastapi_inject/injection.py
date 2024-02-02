@@ -1,30 +1,23 @@
 import functools
 import inspect
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import AsyncExitStack, ExitStack
-from typing import Any, Iterator, NamedTuple, ParamSpec, TypeVar, overload
+from typing import Any, NamedTuple, ParamSpec, TypeVar, overload
 
 import anyio
-from fastapi import FastAPI
 from fastapi.params import Depends
 
-from ._exceptions import NotEnabledError
+from fastapi_inject.enable import _get_app_instance
+
 from .utils import Dependency, _resolve_dependency_async, _resolve_dependency_sync
 
 T = TypeVar("T")
 P = ParamSpec("P")
 
-app_instance: FastAPI | None = None
-
-
-def enable_injection(app: FastAPI) -> None:
-    global app_instance  # noqa: PLW0603
-    app_instance = app
-
 
 class DependencyInfo(NamedTuple):
     name: str
-    dependency: Callable[..., Any]
+    dependency: Callable[..., T]
     arg_position: int
 
 
@@ -34,7 +27,9 @@ def _is_provided(dep_info: DependencyInfo, args: tuple, kwargs: dict) -> bool:
     )
 
 
-def _get_dependencies(func: Callable[P, T | Awaitable[T]]) -> list[DependencyInfo]:
+def _get_dependencies(
+    func: Callable[..., Any | Awaitable[Any]],
+) -> list[DependencyInfo]:
     dependencies = []
     for i, param in enumerate(inspect.signature(func).parameters.values()):
         if not isinstance(param.default, Depends):
@@ -50,35 +45,39 @@ def _get_dependencies(func: Callable[P, T | Awaitable[T]]) -> list[DependencyInf
                 name=param.name,
                 dependency=param.default.dependency,
                 arg_position=-1 if param.kind == param.KEYWORD_ONLY else i,
-            )
+            ),
         )
     return dependencies
 
 
 def _dependencies(
-    dependencies: list[DependencyInfo], args: tuple, kwargs: dict
+    dependencies: list[DependencyInfo],
+    args: tuple,
+    kwargs: dict,
 ) -> Iterator[tuple[str, Dependency]]:
-    if app_instance is None:
-        raise NotEnabledError
+    app_instance = _get_app_instance()
     for dependency_info in dependencies:
         if _is_provided(dependency_info, args, kwargs):
             continue
         dependency = app_instance.dependency_overrides.get(
-            dependency_info.dependency, dependency_info.dependency
+            dependency_info.dependency,
+            dependency_info.dependency,
         )
         yield dependency_info.name, dependency
 
 
 def _get_sync_wrapper(
-    func: Callable[P, T], dependencies: list[DependencyInfo]
+    func: Callable[P, T],
 ) -> Callable[P, T]:
-    exit_stack = ExitStack()
+    dependencies = _get_dependencies(func)
 
     @functools.wraps(func)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+        exit_stack = ExitStack()
         for name, dependency in _dependencies(dependencies, args, kwargs):
             kwargs[name] = _resolve_dependency_sync(
-                dependency=dependency, exit_stack=exit_stack
+                dependency=dependency,
+                exit_stack=exit_stack,
             )
         return func(*args, **kwargs)
 
@@ -87,17 +86,25 @@ def _get_sync_wrapper(
 
 def _get_async_wrapper(
     func: Callable[P, Awaitable[T]],
-    dependencies: list[DependencyInfo],
 ) -> Callable[P, Awaitable[T]]:
-    async_exit_stack = AsyncExitStack()
+    dependencies = _get_dependencies(func)
 
     @functools.wraps(func)
     async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+        async_exit_stack = AsyncExitStack()
+
+        async def _resolve_dependency_task(
+            name: str,
+            dependency: Dependency[T],
+        ) -> None:
+            kwargs[name] = await _resolve_dependency_async(
+                dependency=dependency,
+                async_exit_stack=async_exit_stack,
+            )
+
         async with anyio.create_task_group() as tg:
             for name, dependency in _dependencies(dependencies, args, kwargs):
-                kwargs[name] = tg.start_soon(
-                    _resolve_dependency_async, dependency, async_exit_stack
-                )
+                tg.start_soon(_resolve_dependency_task, name, dependency)
         return await func(*args, **kwargs)
 
     return wrapper
@@ -114,8 +121,6 @@ def inject(func: Callable[P, T]) -> Callable[P, T]:
 
 
 def inject(func: Callable[P, T]) -> Callable[P, T] | Callable[P, Awaitable[T]]:
-    dependencies = _get_dependencies(func)
-
     if inspect.iscoroutinefunction(func):
-        return _get_async_wrapper(func, dependencies)
-    return _get_sync_wrapper(func, dependencies)
+        return _get_async_wrapper(func)
+    return _get_sync_wrapper(func)
