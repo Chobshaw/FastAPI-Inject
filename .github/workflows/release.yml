@@ -1,0 +1,67 @@
+name: Test and Build
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "fastapi_inject/**"
+      - "tests/**"
+      - ".github/workflows/build.yml"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull git repo
+        uses: actions/checkout@v4
+
+      - name: Install python version 3.12
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.12
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+
+      - name: Install dependencies
+        run: |
+          poetry install --no-root
+
+      - name: Run tests with pytest
+        run: |
+          poetry run pytest --junitxml=pytest.xml \
+            --cov-report=term-missing:skip-covered \
+            --cov=fastapi_inject tests/ | tee pytest-coverage.txt
+          test ${PIPESTATUS[0]} -eq 0
+
+      - name: Pytest coverage comment
+        uses: MishaKav/pytest-coverage-comment@main
+        with:
+          pytest-coverage-path: ./pytest-coverage.txt
+          junitxml-path: ./pytest.xml
+
+  build-publish:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull git repo
+        uses: actions/checkout@v4
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+
+      - name: Install dependencies
+        run: |
+          poetry install --no-root
+
+      - name: Build package
+        run: |
+          poetry build
+
+      - name: Publish package
+        run: |
+          poetry publish
+        env:
+          POETRY_PYPI_TOKEN_PYPI: ${{ secrets.PYPI_API_TOKEN }}
