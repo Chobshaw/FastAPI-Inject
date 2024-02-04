@@ -7,25 +7,20 @@ on:
     paths:
       - "fastapi_inject/**"
       - "tests/**"
-      - ".github/workflows/build.yml"
-  pull_request:
-    branches:
-      - main
-    paths:
-      - "fastapi_inject/**"
-      - "tests/**"
+      - "pyproject.toml"
       - ".github/workflows/build.yml"
   workflow_dispatch:
 
 jobs:
   test:
+    permissions: write-all
     runs-on: ubuntu-latest
     steps:
       - name: Pull git repo
         uses: actions/checkout@v4
 
       - name: Install python version 3.12
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v5
         with:
           python-version: 3.12
 

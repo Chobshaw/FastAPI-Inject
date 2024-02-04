@@ -2,6 +2,7 @@ clean:
 	@rm -rf .pytest_cache
 	@rm -rf .coverage
 	@rm -rf .ruff_cache
+	@rm -rf dist
 	@rm -rf pytest-coverage.txt
 	@rm -rf pytest.xml
 	@rm -rf htmlcov
