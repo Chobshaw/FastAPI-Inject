@@ -30,6 +30,7 @@ classifiers = [
 python = "^3.11"
 fastapi = "^0.109.0"
 httpx = "^0.26.0"
+asyncer = "^0.0.4"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
@@ -50,6 +51,10 @@ select = ["ALL"]
 ignore = [
     # Docstrings
     "D",
+    # Todo comments
+    "TD",
+    # Fixme comments
+    "FIX",
     # Missing type annotation for 'self'
     "ANN101",
 ]

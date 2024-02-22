@@ -1,6 +1,6 @@
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import AsyncExitStack, ExitStack, asynccontextmanager, contextmanager
-from typing import TypeVar, cast
+from typing import Any, TypeVar, cast
 
 from fastapi.concurrency import contextmanager_in_threadpool
 from fastapi.dependencies.utils import (
@@ -26,48 +26,71 @@ def _is_async_dependency(dependency: Dependency) -> bool:
 
 
 def _solve_sync_generator_sync_context(
-    gen: SyncGeneratorCallable[T], stack: ExitStack,
+    gen: SyncGeneratorCallable[T],
+    stack: ExitStack,
+    gen_kwargs: dict[str, Any] | None = None,
 ) -> T:
-    cm = contextmanager(gen)()
+    gen_kwargs = gen_kwargs or {}
+    cm = contextmanager(gen)(**gen_kwargs)
     return stack.enter_context(cm)
 
 
 async def _solve_sync_generator_async_context(
-    gen: SyncGeneratorCallable[T], stack: AsyncExitStack,
+    gen: SyncGeneratorCallable[T],
+    stack: AsyncExitStack,
+    gen_kwargs: dict[str, Any] | None = None,
 ) -> T:
-    cm = contextmanager_in_threadpool(contextmanager(gen)())
+    gen_kwargs = gen_kwargs or {}
+    cm = contextmanager_in_threadpool(contextmanager(gen)(**gen_kwargs))
     return await stack.enter_async_context(cm)  # type: ignore[arg-type]
 
 
 async def _solve_async_generator_async_context(
-    gen: AsyncGeneratorCallable[T], stack: AsyncExitStack,
+    gen: AsyncGeneratorCallable[T],
+    stack: AsyncExitStack,
+    gen_kwargs: dict[str, Any] | None = None,
 ) -> T:
-    cm = asynccontextmanager(gen)()
+    gen_kwargs = gen_kwargs or {}
+    cm = asynccontextmanager(gen)(**gen_kwargs)
     return await stack.enter_async_context(cm)  # type: ignore[arg-type]
 
 
-def _resolve_dependency_sync(dependency: Dependency[T], exit_stack: ExitStack) -> T:
+def _call_dependency_sync(
+    dependency: Dependency[T],
+    exit_stack: ExitStack,
+    dep_kwargs: dict[str, Any] | None = None,
+) -> T:
+    dep_kwargs = dep_kwargs or {}
     if _is_async_dependency(dependency):
-        msg = "Cannot inject async dependency into sync function"
-        raise ValueError(msg)
+        error_msg = "Cannot inject async dependency into sync function"
+        raise ValueError(error_msg)
     if is_gen_callable(dependency):
         return _solve_sync_generator_sync_context(
-            gen=cast(SyncGeneratorCallable[T], dependency), stack=exit_stack,
+            gen=cast(SyncGeneratorCallable[T], dependency),
+            stack=exit_stack,
+            gen_kwargs=dep_kwargs,
         )
-    return cast(SyncCallable[T], dependency)()
+    return cast(SyncCallable[T], dependency)(**dep_kwargs)
 
 
-async def _resolve_dependency_async(
-    dependency: Dependency[T], async_exit_stack: AsyncExitStack,
+async def _call_dependency_async(
+    dependency: Dependency[T],
+    async_exit_stack: AsyncExitStack,
+    dep_kwargs: dict[str, Any] | None = None,
 ) -> T:
+    dep_kwargs = dep_kwargs or {}
     if is_gen_callable(dependency):
         return await _solve_sync_generator_async_context(
-            gen=cast(SyncGeneratorCallable[T], dependency), stack=async_exit_stack,
+            gen=cast(SyncGeneratorCallable[T], dependency),
+            stack=async_exit_stack,
+            gen_kwargs=dep_kwargs,
         )
     if is_async_gen_callable(dependency):
         return await _solve_async_generator_async_context(
-            gen=cast(AsyncGeneratorCallable, dependency), stack=async_exit_stack,
+            gen=cast(AsyncGeneratorCallable, dependency),
+            stack=async_exit_stack,
+            gen_kwargs=dep_kwargs,
         )
     if is_coroutine_callable(dependency):
-        return await cast(Awaitable[T], dependency())
-    return await run_in_threadpool(cast(SyncCallable[T], dependency))
+        return await cast(Awaitable[T], dependency(**dep_kwargs))
+    return await run_in_threadpool(cast(SyncCallable[T], dependency), **dep_kwargs)

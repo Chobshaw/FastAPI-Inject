@@ -3,9 +3,9 @@ from contextlib import AsyncExitStack, ExitStack
 import pytest
 
 from fastapi_inject.utils import (
+    _call_dependency_async,
+    _call_dependency_sync,
     _is_async_dependency,
-    _resolve_dependency_async,
-    _resolve_dependency_sync,
     _solve_async_generator_async_context,
     _solve_sync_generator_async_context,
     _solve_sync_generator_sync_context,
@@ -17,6 +17,7 @@ from tests.code.dependencies import (
     sync_function,
     sync_generator,
 )
+from tests.conftest import OVERRIDE_MESSAGE
 
 
 def test_is_async_dependency():
@@ -31,11 +32,32 @@ def test_solve_sync_generator_sync_context():
         assert _solve_sync_generator_sync_context(sync_generator, stack) == MESSAGE
 
 
+def test_solve_sync_generator_sync_context_with_kwargs():
+    with ExitStack() as stack:
+        assert (
+            _solve_sync_generator_sync_context(
+                sync_generator, stack, {"message": OVERRIDE_MESSAGE},
+            )
+            == OVERRIDE_MESSAGE
+        )
+
+
 @pytest.mark.anyio()
 async def test_solve_sync_generator_async_context():
     async with AsyncExitStack() as stack:
         assert (
             await _solve_sync_generator_async_context(sync_generator, stack) == MESSAGE
+        )
+
+
+@pytest.mark.anyio()
+async def test_solve_sync_generator_async_context_with_kwargs():
+    async with AsyncExitStack() as stack:
+        assert (
+            await _solve_sync_generator_async_context(
+                sync_generator, stack, {"message": OVERRIDE_MESSAGE},
+            )
+            == OVERRIDE_MESSAGE
         )
 
 
@@ -48,21 +70,32 @@ async def test_solve_async_generator_async_context():
         )
 
 
-def test_resolve_dependency_sync():
+@pytest.mark.anyio()
+async def test_solve_async_generator_async_context_with_kwargs():
+    async with AsyncExitStack() as stack:
+        assert (
+            await _solve_async_generator_async_context(
+                async_generator, stack, {"message": OVERRIDE_MESSAGE},
+            )
+            == OVERRIDE_MESSAGE
+        )
+
+
+def test_call_dependency_sync():
     error_msg = "Cannot inject async dependency into sync function"
     with ExitStack() as stack:
-        assert _resolve_dependency_sync(sync_function, stack) == MESSAGE
-        assert _resolve_dependency_sync(sync_generator, stack) == MESSAGE
+        assert _call_dependency_sync(sync_function, stack) == MESSAGE
+        assert _call_dependency_sync(sync_generator, stack) == MESSAGE
         with pytest.raises(ValueError, match=error_msg):
-            _resolve_dependency_sync(async_function, stack)
+            _call_dependency_sync(async_function, stack)
         with pytest.raises(ValueError, match=error_msg):
-            _resolve_dependency_sync(async_generator, stack)
+            _call_dependency_sync(async_generator, stack)
 
 
 @pytest.mark.anyio()
-async def test_resolve_dependency_async():
+async def test_call_dependency_async():
     async with AsyncExitStack() as stack:
-        assert await _resolve_dependency_async(sync_function, stack) == MESSAGE
-        assert await _resolve_dependency_async(sync_generator, stack) == MESSAGE
-        assert await _resolve_dependency_async(async_function, stack) == MESSAGE
-        assert await _resolve_dependency_async(async_generator, stack) == MESSAGE
+        assert await _call_dependency_async(sync_function, stack) == MESSAGE
+        assert await _call_dependency_async(sync_generator, stack) == MESSAGE
+        assert await _call_dependency_async(async_function, stack) == MESSAGE
+        assert await _call_dependency_async(async_generator, stack) == MESSAGE
