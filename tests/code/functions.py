@@ -3,6 +3,7 @@ from fastapi import Depends
 from tests.code.dependencies import (
     async_function,
     async_generator,
+    name_function,
     sync_function,
     sync_generator,
 )
@@ -42,3 +43,17 @@ async def get_messages_async(
     message_4: str = Depends(async_generator),
 ) -> list[str]:
     return [message_1, message_2, message_3, message_4]
+
+
+def get_personalised_message_sync(
+    name: str,
+    message: str = Depends(name_function),
+) -> str:
+    return message
+
+
+async def get_personalised_message_async(
+    name: str,
+    message: str = Depends(name_function),
+) -> str:
+    return message

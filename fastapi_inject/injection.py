@@ -2,14 +2,20 @@ import functools
 import inspect
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import AsyncExitStack, ExitStack
-from typing import Any, NamedTuple, ParamSpec, TypeVar, overload
+from typing import Any, NamedTuple, ParamSpec, TypeVar, cast, overload
 
-import anyio
+import asyncer
+from fastapi import FastAPI
 from fastapi.params import Depends
 
 from fastapi_inject.enable import _get_app_instance
-
-from .utils import Dependency, _resolve_dependency_async, _resolve_dependency_sync
+from fastapi_inject.utils import (
+    AsyncDependency,
+    Dependency,
+    SyncDependency,
+    _call_dependency_async,
+    _call_dependency_sync,
+)
 
 T = TypeVar("T")
 P = ParamSpec("P")
@@ -17,107 +23,181 @@ P = ParamSpec("P")
 
 class DependencyInfo(NamedTuple):
     name: str
-    dependency: Callable[..., T]
-    arg_position: int
+    dependency: Dependency | None
 
 
-def _is_provided(dep_info: DependencyInfo, args: tuple, kwargs: dict) -> bool:
-    return dep_info.name in kwargs or (
-        dep_info.arg_position != -1 and dep_info.arg_position < len(args)
-    )
+def _get_call_kwargs(
+    func: Callable[P, T],
+    *args: P.args,
+    **kwargs: P.kwargs,
+) -> dict[str, Any]:
+    call_kwargs = {}
+    i = 0
+    for param in inspect.signature(func).parameters.values():
+        if i < len(args):
+            call_kwargs[param.name] = args[i]
+            i += 1
+        elif param.name in kwargs:
+            call_kwargs[param.name] = kwargs[param.name]
+        elif isinstance(param.default, Depends):
+            continue
+        elif param.default != inspect.Parameter.empty:
+            call_kwargs[param.name] = param.default
+    return call_kwargs
 
 
-def _get_dependencies(
-    func: Callable[..., Any | Awaitable[Any]],
-) -> list[DependencyInfo]:
-    dependencies = []
-    for i, param in enumerate(inspect.signature(func).parameters.values()):
+def _sub_dependencies(
+    dependency: Dependency,
+    app_instance: FastAPI,
+) -> Iterator[DependencyInfo]:
+    for param in inspect.signature(dependency).parameters.values():
         if not isinstance(param.default, Depends):
+            yield DependencyInfo(param.name, None)
             continue
         if param.default.dependency is None:
-            msg = (
+            error_msg = (
                 "Depends instance must have a dependency. "
                 "Please add a dependency or use a type annotation"
             )
-            raise ValueError(msg)
-        dependencies.append(
-            DependencyInfo(
-                name=param.name,
-                dependency=param.default.dependency,
-                arg_position=-1 if param.kind == param.KEYWORD_ONLY else i,
+            raise ValueError(error_msg)
+        yield DependencyInfo(
+            param.name,
+            app_instance.dependency_overrides.get(
+                param.default.dependency,
+                param.default.dependency,
             ),
         )
-    return dependencies
 
 
-def _dependencies(
-    dependencies: list[DependencyInfo],
-    args: tuple,
-    kwargs: dict,
-) -> Iterator[tuple[str, Dependency]]:
-    app_instance = _get_app_instance()
-    for dependency_info in dependencies:
-        if _is_provided(dependency_info, args, kwargs):
-            continue
-        dependency = app_instance.dependency_overrides.get(
-            dependency_info.dependency,
-            dependency_info.dependency,
+def _resolve_sub_dependency_sync(
+    sub_dependency: DependencyInfo,
+    call_kwargs: dict[str, T],
+    app_instance: FastAPI,
+    exit_stack: ExitStack,
+) -> T | None:
+    if sub_dependency.name in call_kwargs:
+        return call_kwargs[sub_dependency.name]
+    if sub_dependency.dependency is not None:
+        return _resolve_dependency_sync(
+            cast(SyncDependency, sub_dependency.dependency),
+            call_kwargs,
+            app_instance,
+            exit_stack,
         )
-        yield dependency_info.name, dependency
+    return None
 
 
+def _resolve_dependency_sync(
+    dependency: SyncDependency[T],
+    call_kwargs: dict[str, Any],
+    app_instance: FastAPI,
+    exit_stack: ExitStack,
+) -> T:
+    kwargs = {}
+    for sub_dependency in _sub_dependencies(dependency, app_instance):
+        resolved = _resolve_sub_dependency_sync(
+            sub_dependency=sub_dependency,
+            call_kwargs=call_kwargs,
+            app_instance=app_instance,
+            exit_stack=exit_stack,
+        )
+        if resolved is not None:
+            kwargs[sub_dependency.name] = resolved
+
+    return _call_dependency_sync(dependency, exit_stack, kwargs)
+
+
+# TODO: Add check for positional only parameters
 def _get_sync_wrapper(
     func: Callable[P, T],
 ) -> Callable[P, T]:
-    dependencies = _get_dependencies(func)
 
     @functools.wraps(func)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
         exit_stack = ExitStack()
-        for name, dependency in _dependencies(dependencies, args, kwargs):
-            kwargs[name] = _resolve_dependency_sync(
-                dependency=dependency,
-                exit_stack=exit_stack,
-            )
-        return func(*args, **kwargs)
+        app_instance = _get_app_instance()
+        call_kwargs = _get_call_kwargs(func, *args, **kwargs)
+
+        return _resolve_dependency_sync(
+            dependency=func,
+            call_kwargs=call_kwargs,
+            app_instance=app_instance,
+            exit_stack=exit_stack,
+        )
 
     return wrapper
+
+
+async def _resolve_sub_dependency_async(
+    sub_dependency: DependencyInfo,
+    call_kwargs: dict[str, T],
+    app_instance: FastAPI,
+    async_exit_stack: AsyncExitStack,
+) -> T | None:
+    if sub_dependency.name in call_kwargs:
+        return call_kwargs[sub_dependency.name]
+    if sub_dependency.dependency is not None:
+        return await _resolve_dependency_async(
+            cast(AsyncDependency, sub_dependency.dependency),
+            call_kwargs,
+            app_instance,
+            async_exit_stack,
+        )
+    return None
+
+
+async def _resolve_dependency_async(
+    dependency: AsyncDependency[T],
+    call_kwargs: dict[str, Any],
+    app_instance: FastAPI,
+    async_exit_stack: AsyncExitStack,
+) -> T:
+    async with asyncer.create_task_group() as tg:
+        soon_kwargs = {}
+        for sub_dependency in _sub_dependencies(dependency, app_instance):
+            soon_kwargs[sub_dependency.name] = tg.soonify(
+                _resolve_sub_dependency_async,
+            )(
+                sub_dependency=sub_dependency,
+                call_kwargs=call_kwargs,
+                app_instance=app_instance,
+                async_exit_stack=async_exit_stack,
+            )
+    kwargs = {
+        name: soon_kwarg.value
+        for name, soon_kwarg in soon_kwargs.items()
+        if soon_kwarg.value is not None
+    }
+
+    return await _call_dependency_async(dependency, async_exit_stack, kwargs)
 
 
 def _get_async_wrapper(
     func: Callable[P, Awaitable[T]],
 ) -> Callable[P, Awaitable[T]]:
-    dependencies = _get_dependencies(func)
 
     @functools.wraps(func)
     async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
         async_exit_stack = AsyncExitStack()
+        app_instance = _get_app_instance()
+        call_kwargs = _get_call_kwargs(func, *args, **kwargs)
 
-        async def _resolve_dependency_task(
-            name: str,
-            dependency: Dependency[T],
-        ) -> None:
-            kwargs[name] = await _resolve_dependency_async(
-                dependency=dependency,
-                async_exit_stack=async_exit_stack,
-            )
-
-        async with anyio.create_task_group() as tg:
-            for name, dependency in _dependencies(dependencies, args, kwargs):
-                tg.start_soon(_resolve_dependency_task, name, dependency)
-        return await func(*args, **kwargs)
+        return await _resolve_dependency_async(
+            dependency=func,
+            call_kwargs=call_kwargs,
+            app_instance=app_instance,
+            async_exit_stack=async_exit_stack,
+        )
 
     return wrapper
 
 
 @overload
-def inject(func: Callable[P, Awaitable[T]]) -> Callable[P, Awaitable[T]]:
-    ...
+def inject(func: Callable[P, Awaitable[T]]) -> Callable[P, Awaitable[T]]: ...
 
 
 @overload
-def inject(func: Callable[P, T]) -> Callable[P, T]:
-    ...
+def inject(func: Callable[P, T]) -> Callable[P, T]: ...
 
 
 def inject(func: Callable[P, T]) -> Callable[P, T] | Callable[P, Awaitable[T]]:
