@@ -1,13 +1,13 @@
+from typing import Any
+
 import pytest
 from fastapi import Depends, FastAPI
 from httpx import AsyncClient
 
 from fastapi_inject.injection import (
-    DependencyInfo,
-    _dependencies,
-    _get_dependencies,
+    _get_call_kwargs,
     _get_sync_wrapper,
-    _is_provided,
+    _sub_dependencies,
     inject,
 )
 from tests.code.dependencies import (
@@ -23,100 +23,74 @@ from tests.code.functions import (
     get_messages_async,
     get_messages_mixed_deps,
     get_messages_sync,
+    get_personalised_message_async,
+    get_personalised_message_sync,
 )
 from tests.conftest import OVERRIDE_MESSAGE
 
 
-def test_is_provided():
-    dependency = lambda: MESSAGE  # noqa: E731
-    dep_info = DependencyInfo(name="dependency", dependency=dependency, arg_position=0)
+@pytest.mark.parametrize(
+    ("args", "kwargs", "expected_result"),
+    [
+        ((10, "world"), {}, {"a": 10, "b": "world"}),
+        ((10,), {"b": "world"}, {"a": 10, "b": "world"}),
+        ((), {"a": 10, "b": "world"}, {"a": 10, "b": "world"}),
+        ((), {"a": 10}, {"a": 10, "b": "hello"}),
+    ],
+)
+def test_get_call_kwargs(
+    args: tuple,
+    kwargs: dict[str, Any],
+    expected_result: dict[str, Any],
+) -> None:
+    def my_func(a: int, b: str = "hello") -> None:
+        pass
 
-    assert _is_provided(dep_info, [], {"dependency": MESSAGE})
-    assert _is_provided(dep_info, [MESSAGE], {})
-    assert not _is_provided(dep_info, [], {})
-
-    kw_only_dep_info = DependencyInfo(
-        name="dependency",
-        dependency=dependency,
-        arg_position=-1,
-    )
-
-    assert not _is_provided(kw_only_dep_info, [MESSAGE], {})
+    assert _get_call_kwargs(my_func, *args, **kwargs) == expected_result
 
 
-def test_get_dependencies():
-    # Test no dependencies
-    dependencies = _get_dependencies(get_message_no_deps)
-    assert len(dependencies) == 0
+def test_sub_dependencies(enabled_app: FastAPI):
+    dependencies = [sync_function, async_function, sync_generator, async_generator]
+    for i, sub_dependency in enumerate(
+        _sub_dependencies(get_messages_async, enabled_app),
+    ):
+        assert sub_dependency.name == f"message_{i + 1}"
+        assert sub_dependency.dependency == dependencies[i]
 
-    # Test mixed dependencies
-    dependencies = _get_dependencies(get_messages_mixed_deps)
-    assert len(dependencies) == 2
-    assert dependencies[0] == DependencyInfo(
-        name="message_2",
-        dependency=async_function,
-        arg_position=1,
-    )
+    for sub_dependency in _sub_dependencies(get_message_no_deps, enabled_app):
+        assert sub_dependency.name == "message"
+        assert sub_dependency.dependency is None
 
-    # Test all dependencies
-    dependencies = _get_dependencies(get_messages_async)
-    assert len(dependencies) == 4
-    assert dependencies[0] == DependencyInfo(
-        name="message_1",
-        dependency=sync_function,
-        arg_position=0,
-    )
 
-    # Test missing dependency
-    def get_message_missing_dependency(message: str = Depends()) -> str:
+def test_sub_dependencies_missing_dependency(enabled_app: FastAPI):
+    def get_message_missing_dep(message: str = Depends()) -> str:
         return message  # pragma: no cover
 
-    error_msg = (
-        "Depends instance must have a dependency. "
-        "Please add a dependency or use a type annotation"
-    )
-    with pytest.raises(ValueError, match=error_msg):
-        _get_dependencies(get_message_missing_dependency)
-
-
-def test_dependencies_generator(
-    enabled_app: FastAPI,
-):
-    dependencies = [sync_function, async_function, sync_generator, async_generator]
-    dependencies_info = _get_dependencies(get_messages_async)
-
-    # Test generator
-    i = 0
-    for name, dependency in _dependencies(
-        dependencies=dependencies_info,
-        args=(),
-        kwargs={},
+    with pytest.raises(  # noqa: PT012
+        ValueError,
+        match=(
+            "Depends instance must have a dependency. "
+            "Please add a dependency or use a type annotation"
+        ),
     ):
-        assert name == f"message_{i + 1}"
-        assert dependency == dependencies[i]
-        i += 1
+        for sub_dependency in _sub_dependencies(get_message_missing_dep, enabled_app):
+            assert sub_dependency.name == "message"  # pragma: no cover
 
-    # Test generator with provided arg dependency
-    i = 2
-    for name, dependency in _dependencies(
-        dependencies=dependencies_info,
-        args=(MESSAGE, MESSAGE),
-        kwargs={},
-    ):
-        assert name == f"message_{i + 1}"
-        assert dependency == dependencies[i]
-        i += 1
 
-    # Test generator with provided kwarg dependency
-    i = 0
-    for name, dependency in _dependencies(
-        dependencies=dependencies_info,
-        args=(),
-        kwargs={"message_4": MESSAGE},
+@pytest.mark.anyio()
+async def test_sub_dependencies_with_overrides(app_with_dependency_overrides: FastAPI):
+    async def get_messages(
+        message_1: str = Depends(sync_function),
+        message_2: str = Depends(async_function),
+    ) -> list[str]:
+        return [message_1, message_2]  # pragma: no cover
+
+    for sub_dependency in _sub_dependencies(
+        get_messages,
+        app_with_dependency_overrides,
     ):
-        assert name == f"message_{i + 1}"
-        assert dependency == dependencies[i]
-        i += 1
+        assert sub_dependency.name in ["message_1", "message_2"]
+        assert sub_dependency.dependency not in [sync_function, async_function]
 
 
 def test_inject_sync(enabled_app: FastAPI):
@@ -125,6 +99,7 @@ def test_inject_sync(enabled_app: FastAPI):
     assert inject(get_messages_sync)() == [MESSAGE, MESSAGE]
     assert inject(get_messages_sync)(MESSAGE) == [MESSAGE, MESSAGE]
     assert inject(get_messages_sync)(message_1=MESSAGE) == [MESSAGE, MESSAGE]
+    assert inject(get_personalised_message_sync)(name="John") == "Hello John!"
 
     error_msg = "Cannot inject async dependency into sync function"
     with pytest.raises(ValueError, match=error_msg):
@@ -139,6 +114,7 @@ async def test_inject_async(enabled_app: FastAPI):
         MESSAGE,
         MESSAGE,
     ]
+    assert await inject(get_personalised_message_async)(name="John") == "Hello John!"
 
 
 @pytest.mark.anyio()
