@@ -1,4 +1,4 @@
-name: Test and Build
+name: Test
 
 on:
   push:
@@ -8,8 +8,8 @@ on:
       - "fastapi_inject/**"
       - "tests/**"
       - "pyproject.toml"
-      - ".github/workflows/build.yml"
-  workflow_dispatch:
+      - ".github/workflows/**"
+  workflow_dispatch: null
 
 jobs:
   test:
@@ -44,31 +44,10 @@ jobs:
           pytest-coverage-path: ./pytest-coverage.txt
           junitxml-path: ./pytest.xml
 
-  build-publish:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - name: Pull git repo
-        uses: actions/checkout@v4
+      - run: coverage html --title "FastAPI-Inject Coverage"
 
-      - name: Install python version 3.12
-        uses: actions/setup-python@v2
+      - name: Store coverage html
+        uses: actions/upload-artifact@v4
         with:
-          python-version: 3.12
-
-      - name: Install Poetry
-        uses: snok/install-poetry@v1
-
-      - name: Install dependencies
-        run: |
-          poetry install --no-root
-
-      - name: Build package
-        run: |
-          poetry build
-
-      - name: Publish package
-        run: |
-          poetry publish
-        env:
-          POETRY_PYPI_TOKEN_PYPI: ${{ secrets.PYPI_API_TOKEN }}
+          name: coverage-html
+          path: htmlcov
