@@ -44,6 +44,14 @@ jobs:
           pytest-coverage-path: ./pytest-coverage.txt
           junitxml-path: ./pytest.xml
 
+      - run: coverage html --title "FastAPI-Inject Coverage"
+
+      - name: Store coverage html
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: htmlcov
+
   build-publish:
     needs: test
     runs-on: ubuntu-latest

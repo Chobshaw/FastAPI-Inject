@@ -37,6 +37,8 @@ pytest = "^8.0.0"
 pytest-cov = "^4.1.0"
 uvicorn = "^0.27.0.post1"
 mypy = "^1.8.0"
+coverage = "^7.4.2"
+smokeshow = "^0.4.0"
 
 [build-system]
 requires = ["poetry-core"]
