@@ -44,7 +44,7 @@ jobs:
           pytest-coverage-path: ./pytest-coverage.txt
           junitxml-path: ./pytest.xml
 
-      - run: coverage html --title "FastAPI-Inject Coverage"
+      - run: poetry run coverage html --title "FastAPI-Inject Coverage"
 
       - name: Store coverage html
         uses: actions/upload-artifact@v4
